@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIH 26037 — Adaptive planning testbed</title>
+<style>
+  :root{
+    --bg:#f2f0ec; --panel:#ffffff; --ink:#15212b; --muted:#5d6b78; --line:#d8d3ca;
+    --road:#cfc9c0; --shoulder:#e6e1d8; --edge:#a79f93;
+    --ego:#1c6f6b; --path:#0f7ad1; --pred:#b4651c; --danger:#b3261e; --ok:#2f7a3d;
+    --grid:#c9c3b8; --chip:#ebe7e0;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0e161d; --panel:#141f28; --ink:#e7edf2; --muted:#94a6b5; --line:#243441;
+      --road:#1e2c37; --shoulder:#17232c; --edge:#3d5364;
+      --ego:#4bd6c4; --path:#5fb0ff; --pred:#e8a33d; --danger:#ff6b5e; --ok:#63d18a;
+      --grid:#22313d; --chip:#1b2831;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0e161d; --panel:#141f28; --ink:#e7edf2; --muted:#94a6b5; --line:#243441;
+    --road:#1e2c37; --shoulder:#17232c; --edge:#3d5364;
+    --ego:#4bd6c4; --path:#5fb0ff; --pred:#e8a33d; --danger:#ff6b5e; --ok:#63d18a;
+    --grid:#22313d; --chip:#1b2831;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI",Roboto,-apple-system,"Helvetica Neue",Arial,sans-serif;
+    font-size:15px; line-height:1.5;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:20px 16px 48px}
+  header{margin-bottom:16px}
+  h1{font-size:22px; margin:0 0 4px; letter-spacing:-.01em; font-weight:650}
+  .sub{color:var(--muted); font-size:13.5px; margin:0; max-width:74ch}
+  .stage{background:var(--panel); border:1px solid var(--line); border-radius:6px; overflow:hidden}
+  canvas{display:block; width:100%; height:auto; background:var(--shoulder)}
+  .bar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px;
+       border-top:1px solid var(--line); background:var(--panel)}
+  button{
+    font:inherit; font-size:13px; color:var(--ink); background:var(--chip);
+    border:1px solid var(--line); border-radius:4px; padding:6px 11px; cursor:pointer;
+  }
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--path); outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--ego); border-color:var(--ego); color:var(--panel)}
+  select{font:inherit; font-size:13px; padding:6px 8px; border-radius:4px;
+         border:1px solid var(--line); background:var(--chip); color:var(--ink)}
+  .sep{width:1px; align-self:stretch; background:var(--line); margin:0 2px}
+  .cols{display:grid; grid-template-columns:1.25fr 1fr; gap:14px; margin-top:14px}
+  @media (max-width:820px){ .cols{grid-template-columns:1fr} }
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:14px}
+  .card h2{font-size:14px; margin:0 0 10px; font-weight:650}
+  .metrics{display:grid; grid-template-columns:repeat(3,1fr); gap:10px}
+  .m{border-left:2px solid var(--line); padding-left:9px}
+  .m .v{font-size:19px; font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+  .m .k{font-size:11.5px; color:var(--muted)}
+  .m.alert{border-left-color:var(--danger)} .m.alert .v{color:var(--danger)}
+  .m.good{border-left-color:var(--ok)}
+  #log{margin:0; padding:0; list-style:none; font-size:12.5px; max-height:168px; overflow-y:auto}
+  #log li{padding:4px 0; border-bottom:1px solid var(--line); color:var(--muted)}
+  #log li b{color:var(--ink); font-weight:600}
+  #log li span{font-variant-numeric:tabular-nums; color:var(--muted)}
+  .state{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px}
+  .pill{font-size:11.5px; padding:3px 8px; border-radius:999px; background:var(--chip);
+        border:1px solid var(--line); color:var(--muted)}
+  .pill.on{color:var(--ink); border-color:var(--ego)}
+  .pill.stop{background:var(--danger); border-color:var(--danger); color:#fff}
+  .legend{display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:var(--muted); margin-top:10px}
+  .legend i{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px;
+            vertical-align:-1px}
+  .note{font-size:12.5px; color:var(--muted); margin-top:14px; max-width:78ch}
+  table{border-collapse:collapse; width:100%; font-size:12.5px}
+  td{padding:4px 0; vertical-align:top}
+  td:first-child{color:var(--muted); width:42%; padding-right:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Adaptive path planning on unstructured roads</h1>
+  <p class="sub">A running prototype of the loop: sense, detect, track, predict, plan, control, replan.
+  Everything on the canvas is computed live — noisy detections, an alpha–beta tracker, constant-velocity
+  prediction with growing uncertainty, and a space–time A* planner that re-solves whenever the road changes.</p>
+</header>
+
+<div class="stage">
+  <canvas id="cv" width="1600" height="420" aria-label="Top-down simulation of the vehicle on an Indian road"></canvas>
+  <div class="bar">
+    <button id="play">Pause</button>
+    <button id="reset">Reset run</button>
+    <select id="scn" aria-label="Scenario"></select>
+    <select id="spd" aria-label="Simulation speed">
+      <option value="0.5">0.5&times;</option>
+      <option value="1" selected>1&times;</option>
+      <option value="2">2&times;</option>
+    </select>
+    <span class="sep"></span>
+    <button class="sensor" data-s="cam" aria-pressed="true">Camera</button>
+    <button class="sensor" data-s="lidar" aria-pressed="true">LiDAR</button>
+    <button class="sensor" data-s="radar" aria-pressed="true">Radar</button>
+    <button id="rain" aria-pressed="false">Rain</button>
+    <span class="sep"></span>
+    <button id="showcost" aria-pressed="false">Cost map</button>
+    <button id="showpred" aria-pressed="true">Predictions</button>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="card">
+    <h2>Run metrics</h2>
+    <div class="state" id="state"></div>
+    <div class="metrics">
+      <div class="m" id="m-coll"><div class="v">0</div><div class="k">Collisions</div></div>
+      <div class="m" id="m-clear"><div class="v">&ndash;</div><div class="k">Min clearance</div></div>
+      <div class="m" id="m-lat"><div class="v">&ndash;</div><div class="k">Replan latency</div></div>
+      <div class="m" id="m-smooth"><div class="v">&ndash;</div><div class="k">Path smoothness</div></div>
+      <div class="m" id="m-prog"><div class="v">0%</div><div class="k">Scenario progress</div></div>
+      <div class="m" id="m-replans"><div class="v">0</div><div class="k">Replans</div></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--ego)"></i>Ego vehicle</span>
+      <span><i style="background:var(--path)"></i>Planned path</span>
+      <span><i style="background:var(--pred)"></i>Predicted motion</span>
+      <span><i style="background:var(--danger)"></i>Safety override</span>
+    </div>
+    <p class="note">Clearance is surface-to-surface distance to the nearest road user. Smoothness is the
+    mean heading change per metre driven — lower is easier for a real controller to follow.</p>
+  </div>
+
+  <div class="card">
+    <h2>Decision log</h2>
+    <ul id="log"></ul>
+  </div>
+</div>
+
+<div class="cols">
+  <div class="card">
+    <h2>What each block does here</h2>
+    <table>
+      <tr><td>Sense</td><td>Range and detection probability depend on which sensors are on and on weather. Turn all three off to see the perception-failure fallback.</td></tr>
+      <tr><td>Detect</td><td>Measurements arrive at 10&nbsp;Hz with Gaussian position noise; fusing more sensors lowers the noise.</td></tr>
+      <tr><td>Track</td><td>Alpha&ndash;beta filter per road user, giving smoothed position and velocity. Tracks are dropped after 1.5&nbsp;s without a detection.</td></tr>
+      <tr><td>Predict</td><td>Constant-velocity rollout over 4&nbsp;s, with an uncertainty radius that grows with horizon.</td></tr>
+      <tr><td>Plan</td><td>A* over a 1&nbsp;m grid where a cell is blocked at the time the vehicle would reach it, then shortcutting and smoothing.</td></tr>
+      <tr><td>Control</td><td>Pure pursuit steering with yaw-rate and acceleration limits.</td></tr>
+      <tr><td>Replan</td><td>Every 400&nbsp;ms, and immediately when the safety layer finds the current path conflicting.</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>Honest limits of this prototype</h2>
+    <p class="note" style="margin-top:0">The world model here is simulated, not sensed from real data — object detection is
+    stubbed with a noise model rather than a trained network, and the vehicle uses kinematic motion, not dynamics with
+    tyre slip. Numbers shown are properties of this simulation, not measured performance of a deployable system.
+    The point it demonstrates is the architecture and the replanning behaviour under sudden changes.</p>
+    <p class="note">Next step in the plan: swap the stubbed detector for a model trained on the India Driving Dataset,
+    and port the same planner into MATLAB/Simulink with RoadRunner Scenario for repeatable scenario batches.</p>
+  </div>
+</div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+// ---------- world constants (1 world unit = 0.1 m) ----------
+var WW=1600, WH=420, CELL=10, GW=160, GH=42;
+var EGO_L=44, EGO_W=19, EGO_R=13;
+var VMAX=78, VPLAN=52, ACC=42, BRK=140, YAW=1.15;
+var HOR=6.0, PSTEP=0.25, PN=Math.round(HOR/PSTEP)+1;
+
+var cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+var C={};
+function readTokens(){
+  var s=getComputedStyle(document.documentElement);
+  ['bg','panel','ink','muted','line','road','shoulder','edge','ego','path','pred','danger','ok','grid']
+    .forEach(function(k){ C[k]=s.getPropertyValue('--'+k).trim(); });
+}
+readTokens();
+if(window.matchMedia) try{ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',readTokens); }catch(e){}
+
+// ---------- scenarios ----------
+function flatBand(c,hw){ return function(x){ return {c:c, hw:hw}; }; }
+var SCEN=[
+{ id:'village', name:'Unmarked village road',
+  band:function(x){ return {c:210+34*Math.sin(x/260), hw:52+12*Math.sin(x/150+1)}; },
+  statics:function(){ return [ {x:520,y:250,r:22,t:'cart'},{x:900,y:170,r:18,t:'rock'},
+                               {x:1180,y:246,r:24,t:'cart'} ]; },
+  agents:function(b){ return [
+    agent('cattle',700,b(700).c-90,0,15),
+    agent('ped',1020,b(1020).c+95,0,-13),
+    agent('bike',330,b(330).c+20,64,4)
+  ];},
+  brief:'Winding road, no markings, a cart parked in the drivable area.' },
+
+{ id:'cattle', name:'Cattle crossing',
+  band:flatBand(210,78),
+  statics:function(){ return [{x:1300,y:150,r:20,t:'rock'}]; },
+  agents:function(){ return [
+    agent('cattle',760,60,2,17), agent('cattle',815,25,1,15),
+    agent('cattle',700,10,3,13), agent('cattle',880,-30,0,16)
+  ];},
+  brief:'A herd enters the carriageway with no warning and does not react to the vehicle.' },
+
+{ id:'market', name:'Dense market street',
+  band:function(x){ return {c:210, hw:70-14*Math.sin(x/190)}; },
+  statics:function(){ return [ {x:430,y:160,r:20,t:'stall'},{x:600,y:262,r:22,t:'stall'},
+    {x:790,y:158,r:20,t:'stall'},{x:980,y:268,r:21,t:'stall'},{x:1210,y:162,r:20,t:'stall'} ]; },
+  agents:function(){ return [
+    agent('ped',520,150,6,14), agent('ped',700,270,-4,-15), agent('ped',900,200,5,11),
+    agent('ped',1100,240,-6,-12), agent('bike',360,230,58,-6), agent('auto',250,180,46,3)
+  ];},
+  brief:'Stalls narrow the drivable width; pedestrians step out from both sides.' },
+
+{ id:'junction', name:'Unsignalised junction',
+  band:flatBand(210,66), cross:{x0:720,x1:880},
+  statics:function(){ return [{x:640,y:130,r:18,t:'stall'}]; },
+  agents:function(){ return [
+    agent('auto',800,-40,3,56), agent('bike',780,470,-2,-62), agent('ped',900,300,-10,-5)
+  ];},
+  brief:'Cross traffic claims the junction without stopping; no signals, no priority markings.' },
+
+{ id:'merge', name:'Highway merge',
+  band:function(x){ return {c:210, hw:x<700?58:86}; },
+  statics:function(){ return []; },
+  agents:function(){ return [
+    agent('auto',560,330,60,-11), agent('bike',980,150,70,5), agent('auto',1250,215,40,0)
+  ];},
+  brief:'A vehicle merges across the vehicle\'s line while traffic ahead is slower.' }
+];
+
+var CLASS={
+  ped:{r:9, col:'#d9534f', label:'Pedestrian'},
+  cattle:{r:17, col:'#a9762f', label:'Cattle'},
+  bike:{r:12, col:'#2f8fd4', label:'Two-wheeler'},
+  auto:{r:18, col:'#6a4fb6', label:'Auto / car'}
+};
+function agent(t,x,y,vx,vy){ return {t:t,x:x,y:y,vx:vx,vy:vy,x0:x,y0:y,vx0:vx,vy0:vy,ph:Math.random()*6.3}; }
+
+// ---------- state ----------
+var S, ego, agents, statics, tracks, path, sBlocked, run, sensors, opts, running=true, tScale=1;
+var lastT=0, perceptAcc=0, planAcc=0;
+
+function nowMs(){ return (window.performance&&performance.now)?performance.now():Date.now(); }
+
+function band(x){ return S.band(Math.max(0,Math.min(WW,x))); }
+function drivable(x,y){
+  var b=band(x);
+  if(Math.abs(y-b.c)<=b.hw) return true;
+  if(S.cross && x>=S.cross.x0 && x<=S.cross.x1 && y>12 && y<WH-12) return true;
+  return false;
+}
+
+function loadScenario(i){
+  S=SCEN[i];
+  statics=S.statics();
+  agents=S.agents(S.band);
+  ego={x:70, y:band(70).c, th:0, v:0, s:0};
+  tracks=[]; path=null;
+  run={t:0, coll:0, minClear:Infinity, lat:[], replans:0, head:0, dist:0, done:false, mode:'cruise', log:[]};
+  buildStatic();
+  logEvent('Scenario loaded', S.brief);
+  drawFrame(); updateHUD();
+}
+
+function buildStatic(){
+  sBlocked=new Uint8Array(GW*GH);
+  for(var gy=0;gy<GH;gy++)for(var gx=0;gx<GW;gx++){
+    var x=gx*CELL+CELL/2, y=gy*CELL+CELL/2, blk=0;
+    if(!drivable(x,y)) blk=1;
+    else for(var i=0;i<statics.length;i++){
+      var o=statics[i], dx=x-o.x, dy=y-o.y;
+      if(dx*dx+dy*dy < (o.r+EGO_R+5)*(o.r+EGO_R+5)){ blk=1; break; }
+    }
+    sBlocked[gy*GW+gx]=blk;
+  }
+}
+
+// ---------- sensing ----------
+function sensorRange(){
+  var r=0, n=0;
+  if(sensors.cam){ r=Math.max(r, opts.rain?260:620); n++; }
+  if(sensors.lidar){ r=Math.max(r, opts.rain?360:520); n++; }
+  if(sensors.radar){ r=Math.max(r, 700); n++; }
+  return {r:r, n:n};
+}
+function perceive(){
+  var sr=sensorRange();
+  if(sr.n===0){ return; }
+  var sigma = 14/Math.sqrt(sr.n) * (opts.rain?1.8:1);
+  var pDet = (opts.rain && sr.n===1 && sensors.cam) ? 0.55 : (sr.n===1?0.85:0.97);
+  for(var i=0;i<agents.length;i++){
+    var a=agents[i], dx=a.x-ego.x, dy=a.y-ego.y, d=Math.hypot(dx,dy);
+    if(d>sr.r) continue;
+    if(Math.random()>pDet) continue;
+    var mx=a.x+gauss()*sigma, my=a.y+gauss()*sigma;
+    var tr=findTrack(i);
+    if(!tr){ tr={id:i,t:a.t,x:mx,y:my,vx:0,vy:0,age:0,seen:0,sig:sigma}; tracks.push(tr);
+      logEvent('New track', CLASS[a.t].label+' at '+(d/10).toFixed(0)+' m'); }
+    else {
+      var dt=Math.max(0.05, run.t-tr.seen);
+      var px=tr.x+tr.vx*dt, py=tr.y+tr.vy*dt;
+      var rx=mx-px, ry=my-py, al=0.55, be=0.28;
+      tr.x=px+al*rx; tr.y=py+al*ry;
+      tr.vx+=be*rx/dt; tr.vy+=be*ry/dt;
+      tr.sig=sigma;
+    }
+    tr=findTrack(i); tr.seen=run.t;
+  }
+}
+function findTrack(id){ for(var i=0;i<tracks.length;i++) if(tracks[i].id===id) return tracks[i]; return null; }
+function gauss(){ var u=1-Math.random(), v=Math.random();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(6.2831853*v); }
+
+function pruneTracks(){
+  for(var i=tracks.length-1;i>=0;i--){
+    if(run.t-tracks[i].seen>1.5){
+      logEvent('Track dropped', CLASS[tracks[i].t].label+' not detected for 1.5 s');
+      tracks.splice(i,1);
+    }
+  }
+}
+function predictAll(){
+  for(var i=0;i<tracks.length;i++){
+    var tr=tracks[i]; tr.pred=[];
+    for(var k=0;k<PN;k++){
+      var t=k*PSTEP;
+      tr.pred.push({x:tr.x+tr.vx*t, y:tr.y+tr.vy*t, r:CLASS[tr.t].r + tr.sig*0.8 + 9*t});
+    }
+  }
+}
+
+// ---------- planner ----------
+function dynBlocked(x,y,t){
+  var k=Math.min(PN-1, Math.round(t/PSTEP));
+  for(var i=0;i<tracks.length;i++){
+    var p=tracks[i].pred; if(!p) continue;
+    var q=p[k], dx=x-q.x, dy=y-q.y, rr=q.r+EGO_R;
+    if(dx*dx+dy*dy < rr*rr) return true;
+  }
+  return false;
+}
+function cellFree(gx,gy){ return gx>=0&&gy>=0&&gx<GW&&gy<GH&&!sBlocked[gy*GW+gx]; }
+
+function plan(){
+  var t0=nowMs();
+  var sx=Math.floor(ego.x/CELL), sy=Math.floor(ego.y/CELL);
+  if(!cellFree(sx,sy)){
+    var best=null;
+    for(var dy=-3;dy<=3;dy++)for(var dx=-3;dx<=3;dx++)
+      if(cellFree(sx+dx,sy+dy)){ var d=dx*dx+dy*dy; if(!best||d<best.d) best={x:sx+dx,y:sy+dy,d:d}; }
+    if(best){ sx=best.x; sy=best.y; }
+  }
+  var gxG=GW-4, gyG=Math.floor(band(WW-40).c/CELL);
+  while(gyG>0 && !cellFree(gxG,gyG)) gyG--;
+
+  var N=GW*GH, g=new Float32Array(N), f=new Float32Array(N), came=new Int32Array(N), st=new Uint8Array(N);
+  g.fill(Infinity); f.fill(Infinity); came.fill(-1);
+  var s=sy*GW+sx, goal=gyG*GW+gxG;
+  var heap=[s]; g[s]=0; f[s]=h(sx,sy);
+  function h(x,y){ return Math.hypot(gxG-x,gyG-y)*CELL; }
+  function push(n){ heap.push(n); var i=heap.length-1;
+    while(i>0){ var p=(i-1)>>1; if(f[heap[p]]<=f[heap[i]]) break; var tmp=heap[p];heap[p]=heap[i];heap[i]=tmp; i=p; } }
+  function pop(){ var top=heap[0], last=heap.pop();
+    if(heap.length){ heap[0]=last; var i=0;
+      for(;;){ var l=2*i+1,r=l+1,m=i;
+        if(l<heap.length&&f[heap[l]]<f[heap[m]])m=l;
+        if(r<heap.length&&f[heap[r]]<f[heap[m]])m=r;
+        if(m===i)break; var tmp=heap[m];heap[m]=heap[i];heap[i]=tmp; i=m; } }
+    return top; }
+
+  var found=false, iter=0, MAXI=26000;
+  while(heap.length && iter++<MAXI){
+    var cur=pop(); if(st[cur]) continue; st[cur]=1;
+    if(cur===goal || (cur%GW)>=gxG){ goal=cur; found=true; break; }
+    var cx=cur%GW, cy=(cur-cx)/GW;
+    for(var dy2=-1;dy2<=1;dy2++)for(var dx2=-1;dx2<=1;dx2++){
+      if(!dx2&&!dy2) continue;
+      var nx=cx+dx2, ny=cy+dy2;
+      if(!cellFree(nx,ny)) continue;
+      var n=ny*GW+nx; if(st[n]) continue;
+      var step=(dx2&&dy2)?CELL*1.414:CELL;
+      var ng=g[cur]+step;
+      if(dynBlocked(nx*CELL+CELL/2, ny*CELL+CELL/2, ng/VPLAN)) continue;
+      if(ng<g[n]){ g[n]=ng; came[n]=cur; f[n]=ng+h(nx,ny)*1.05; push(n); }
+    }
+  }
+  var lat=nowMs()-t0;
+  run.lat.push(lat); if(run.lat.length>40) run.lat.shift();
+  run.replans++;
+  if(!found){ path=null; return false; }
+  var pts=[], n2=goal;
+  while(n2!==-1){ var px=n2%GW, py=(n2-px)/GW; pts.push({x:px*CELL+CELL/2, y:py*CELL+CELL/2}); n2=came[n2]; }
+  pts.reverse();
+  path=smooth(pts);
+  return true;
+}
+
+function segClear(a,b){
+  var d=Math.hypot(b.x-a.x,b.y-a.y), n=Math.ceil(d/6);
+  for(var i=0;i<=n;i++){
+    var x=a.x+(b.x-a.x)*i/n, y=a.y+(b.y-a.y)*i/n;
+    if(!cellFree(Math.floor(x/CELL),Math.floor(y/CELL))) return false;
+  }
+  return true;
+}
+function smooth(pts){
+  var out=[pts[0]], i=0;
+  while(i<pts.length-1){
+    var j=pts.length-1;
+    for(; j>i+1; j--) if(segClear(pts[i],pts[j])) break;
+    out.push(pts[j]); i=j;
+  }
+  var res=[];
+  for(var k=0;k<out.length-1;k++){
+    var a=out[k], b=out[k+1], d=Math.hypot(b.x-a.x,b.y-a.y), n=Math.max(1,Math.round(d/18));
+    for(var m=0;m<n;m++) res.push({x:a.x+(b.x-a.x)*m/n, y:a.y+(b.y-a.y)*m/n});
+  }
+  res.push(out[out.length-1]);
+  for(var p=0;p<2;p++)
+    for(var q=1;q<res.length-1;q++){
+      res[q]={x:(res[q-1].x+2*res[q].x+res[q+1].x)/4, y:(res[q-1].y+2*res[q].y+res[q+1].y)/4};
+    }
+  return res;
+}
+
+// ---------- safety layer ----------
+function safetyCheck(){
+  var sr=sensorRange();
+  if(sr.n===0) return {v:0, mode:'blind', clear:Infinity};
+  if(!path) return {v:0, mode:'nopath', clear:Infinity};
+  var minC=Infinity, tHit=Infinity;
+  var idx=nearestIdx(), s=0;
+  for(var t=0;t<=3.0;t+=0.15){
+    var ahead=ego.v*t, p=pointAhead(idx,ahead);
+    for(var i=0;i<tracks.length;i++){
+      var pr=tracks[i].pred; if(!pr) continue;
+      var k=Math.min(PN-1,Math.round(t/PSTEP)), q=pr[k];
+      var d=Math.hypot(p.x-q.x,p.y-q.y)-(EGO_R+CLASS[tracks[i].t].r);
+      if(d<minC){ minC=d; if(d<6) tHit=Math.min(tHit,t); }
+    }
+  }
+  if(minC<12) return {v:0, mode:'stop', clear:minC};
+  if(minC<28) return {v:8, mode:'yield', clear:minC};
+  if(minC<50) return {v:24, mode:'slow', clear:minC};
+  return {v:VMAX, mode:'cruise', clear:minC};
+}
+
+function nearestIdx(){
+  if(!path) return 0;
+  var bi=0, bd=Infinity;
+  for(var i=0;i<path.length;i++){
+    var d=(path[i].x-ego.x)*(path[i].x-ego.x)+(path[i].y-ego.y)*(path[i].y-ego.y);
+    if(d<bd){bd=d;bi=i;}
+  }
+  return bi;
+}
+function pointAhead(i,dist){
+  if(!path) return {x:ego.x,y:ego.y};
+  var acc=0;
+  for(var k=i;k<path.length-1;k++){
+    var d=Math.hypot(path[k+1].x-path[k].x, path[k+1].y-path[k].y);
+    if(acc+d>=dist){
+      var r=(dist-acc)/d;
+      return {x:path[k].x+(path[k+1].x-path[k].x)*r, y:path[k].y+(path[k+1].y-path[k].y)*r};
+    }
+    acc+=d;
+  }
+  return path[path.length-1];
+}
+
+// ---------- control + world step ----------
+function step(dt){
+  run.t+=dt;
+  for(var i=0;i<agents.length;i++){
+    var a=agents[i];
+    if(a.t==='bike'){ a.y += Math.sin(run.t*1.6+a.ph)*9*dt; }
+    if(a.t==='cattle'){ a.x += Math.sin(run.t*0.5+a.ph)*4*dt; }
+    a.x+=a.vx*dt; a.y+=a.vy*dt;
+    if(a.y<-70||a.y>WH+70){ a.vy*=-1; }
+    if(a.x>WW+80) a.x=-60;
+  }
+
+  perceptAcc+=dt;
+  if(perceptAcc>=0.1){ perceptAcc=0; perceive(); pruneTracks(); predictAll(); }
+
+  if(run.done){
+    ego.v-=Math.min(BRK*dt, ego.v);
+    ego.x+=Math.cos(ego.th)*ego.v*dt; ego.y+=Math.sin(ego.th)*ego.v*dt;
+    run.mode='done';
+    return;
+  }
+  var sf=safetyCheck();
+  planAcc+=dt;
+  var forced = (sf.mode==='stop'||sf.mode==='nopath') && planAcc>0.15;
+  if(planAcc>=0.2 || forced || !path){
+    planAcc=0;
+    var ok=plan();
+    if(!ok && run.mode!=='nopath') logEvent('No feasible path', 'Holding position and waiting for a gap');
+  }
+  if(sf.mode!==run.mode){
+    var msg={cruise:'Path clear, resuming speed', slow:'Reducing speed, predicted conflict ahead',
+      yield:'Yielding, waiting for a safe gap', stop:'Emergency stop, clearance below limit',
+      blind:'All sensors off, degraded perception fallback', nopath:'Planner found no feasible path'}[sf.mode];
+    logEvent(sf.mode==='cruise'?'Cruise':'Safety layer', msg);
+    run.mode=sf.mode;
+  }
+
+  // steering + conservative speed modulation
+  if(path && sf.v>0){
+    // extra safety: if minClear trending down, be more conservative
+    if(run.minClear < 15) sf.v = Math.min(sf.v, 12);
+
+    var L=Math.max(45, Math.min(150, 40+ego.v*0.8));
+    var tp=pointAhead(nearestIdx(), L);
+    var al=Math.atan2(tp.y-ego.y, tp.x-ego.x)-ego.th;
+    while(al>Math.PI)al-=6.2831853; while(al<-Math.PI)al+=6.2831853;
+    var yaw=Math.max(-YAW, Math.min(YAW, 2*Math.sin(al)/L*ego.v));
+    ego.th+=yaw*dt;
+    run.head+=Math.abs(yaw*dt);
+    var vCurve=VMAX*(1-Math.min(0.65, Math.abs(al)/1.3));
+    var vt=Math.min(sf.v, vCurve);
+    ego.v += (vt>ego.v ? Math.min(ACC*dt, vt-ego.v) : -Math.min(BRK*dt, ego.v-vt));
+  } else {
+    ego.v -= Math.min(BRK*dt, ego.v);
+  }
+  var dx=Math.cos(ego.th)*ego.v*dt, dy=Math.sin(ego.th)*ego.v*dt;
+  ego.x+=dx; ego.y+=dy; run.dist+=Math.hypot(dx,dy);
+
+  // true clearance + collisions
+  for(var j=0;j<agents.length;j++){
+    var b=agents[j], d=Math.hypot(b.x-ego.x,b.y-ego.y)-(EGO_R+CLASS[b.t].r);
+    if(d<run.minClear) run.minClear=d;
+    if(d<0 && !b.hit){ b.hit=run.t; run.coll++; logEvent('Collision', 'Contact with '+CLASS[b.t].label.toLowerCase()); }
+    if(b.hit && run.t-b.hit>1.2) b.hit=0;
+  }
+  if(ego.x>WW-60 && !run.done){
+    run.done=true;
+    logEvent('Scenario complete','Goal reached with '+run.coll+' collision'+(run.coll===1?'':'s')+
+      ' and '+(run.minClear/10).toFixed(2)+' m minimum clearance');
+  }
+}
+
+function logEvent(k,m){
+  run.log.unshift({t:run.t,k:k,m:m});
+  if(run.log.length>40) run.log.pop();
+  renderLog();
+}
+
+// ---------- drawing ----------
+function drawFrame(){
+  var w=cv.width, h=cv.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle=C.shoulder; ctx.fillRect(0,0,w,h);
+
+  // road surface
+  ctx.beginPath();
+  for(var x=0;x<=WW;x+=8){ var b=band(x); if(x===0) ctx.moveTo(x,b.c-b.hw); else ctx.lineTo(x,b.c-b.hw); }
+  for(var x2=WW;x2>=0;x2-=8){ var b2=band(x2); ctx.lineTo(x2,b2.c+b2.hw); }
+  ctx.closePath(); ctx.fillStyle=C.road; ctx.fill();
+  ctx.strokeStyle=C.edge; ctx.lineWidth=2; ctx.setLineDash([14,10]); ctx.stroke(); ctx.setLineDash([]);
+  if(S.cross){ ctx.fillStyle=C.road; ctx.fillRect(S.cross.x0,0,S.cross.x1-S.cross.x0,WH); }
+
+  // cost map
+  if(opts.cost){
+    ctx.fillStyle=C.danger; ctx.globalAlpha=0.10;
+    for(var gy=0;gy<GH;gy++)for(var gx=0;gx<GW;gx++)
+      if(sBlocked[gy*GW+gx]) ctx.fillRect(gx*CELL,gy*CELL,CELL,CELL);
+    ctx.globalAlpha=1;
+    ctx.strokeStyle=C.grid; ctx.globalAlpha=0.35; ctx.lineWidth=0.5;
+    for(var gx2=0;gx2<=GW;gx2++){ ctx.beginPath(); ctx.moveTo(gx2*CELL,0); ctx.lineTo(gx2*CELL,WH); ctx.stroke(); }
+    for(var gy2=0;gy2<=GH;gy2++){ ctx.beginPath(); ctx.moveTo(0,gy2*CELL); ctx.lineTo(WW,gy2*CELL); ctx.stroke(); }
+    ctx.globalAlpha=1;
+  }
+
+  // statics
+  for(var i=0;i<statics.length;i++){
+    var o=statics[i];
+    ctx.fillStyle=C.edge; ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,6.2832); ctx.fill();
+  }
+
+  // goal
+  ctx.strokeStyle=C.ok; ctx.lineWidth=4; ctx.beginPath();
+  ctx.moveTo(WW-40,band(WW-40).c-40); ctx.lineTo(WW-40,band(WW-40).c+40); ctx.stroke();
+
+  // sensor field
+  var sr=sensorRange();
+  if(sr.n>0){
+    ctx.fillStyle=C.path; ctx.globalAlpha=0.055;
+    ctx.beginPath(); ctx.moveTo(ego.x,ego.y);
+    ctx.arc(ego.x,ego.y,sr.r,ego.th-1.5,ego.th+1.5); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+
+  // predictions
+  if(opts.pred){
+    for(var t=0;t<tracks.length;t++){
+      var pr=tracks[t].pred; if(!pr) continue;
+      for(var k=2;k<PN;k+=3){
+        ctx.beginPath(); ctx.arc(pr[k].x,pr[k].y,pr[k].r,0,6.2832);
+        ctx.strokeStyle=C.pred; ctx.globalAlpha=0.5-k/PN*0.35; ctx.lineWidth=1.5; ctx.stroke();
+      }
+      ctx.globalAlpha=1;
+    }
+  }
+
+  // path
+  if(path){
+    ctx.beginPath(); ctx.moveTo(path[0].x,path[0].y);
+    for(var p=1;p<path.length;p++) ctx.lineTo(path[p].x,path[p].y);
+    ctx.strokeStyle=C.path; ctx.lineWidth=4; ctx.globalAlpha=0.9; ctx.stroke(); ctx.globalAlpha=1;
+  }
+
+  // agents
+  for(var a=0;a<agents.length;a++){
+    var g2=agents[a], cl=CLASS[g2.t];
+    ctx.fillStyle=cl.col; ctx.globalAlpha=g2.hit?1:0.85;
+    ctx.beginPath(); ctx.arc(g2.x,g2.y,cl.r,0,6.2832); ctx.fill(); ctx.globalAlpha=1;
+    var tr=findTrack(a);
+    if(tr){
+      ctx.strokeStyle=C.pred; ctx.lineWidth=1.5;
+      ctx.strokeRect(tr.x-cl.r-5,tr.y-cl.r-5,(cl.r+5)*2,(cl.r+5)*2);
+      ctx.beginPath(); ctx.moveTo(tr.x,tr.y); ctx.lineTo(tr.x+tr.vx*0.9,tr.y+tr.vy*0.9); ctx.stroke();
+    }
+  }
+
+  // ego
+  ctx.save(); ctx.translate(ego.x,ego.y); ctx.rotate(ego.th);
+  ctx.fillStyle=(run.mode==='stop'||run.mode==='blind'||run.mode==='nopath')?C.danger:C.ego;
+  roundRect(-EGO_L/2,-EGO_W/2,EGO_L,EGO_W,5); ctx.fill();
+  ctx.fillStyle=C.panel; ctx.fillRect(EGO_L/2-11,-EGO_W/2+3,7,EGO_W-6);
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+// ---------- HUD ----------
+var MODE={cruise:'Cruising', slow:'Slowing', yield:'Yielding', stop:'Stopped',
+          blind:'Perception lost', nopath:'No feasible path', done:'Scenario complete'};
+function set(id,val,cls){
+  var el=document.getElementById(id);
+  el.querySelector('.v').textContent=val;
+  el.className='m'+(cls?' '+cls:'');
+}
+function updateHUD(){
+  set('m-coll', run.coll, run.coll?'alert':'good');
+  set('m-clear', run.minClear===Infinity?'–':(run.minClear/10).toFixed(2)+' m',
+      run.minClear<5?'alert':'');
+  var avg=run.lat.length?run.lat.reduce(function(a,b){return a+b;},0)/run.lat.length:0;
+  set('m-lat', run.lat.length?avg.toFixed(1)+' ms':'–');
+  set('m-smooth', run.dist>40?(run.head/(run.dist/10)).toFixed(3)+' rad/m':'–');
+  set('m-prog', Math.max(0,Math.min(100,Math.round((ego.x-70)/(WW-130)*100)))+'%', run.done?'good':'');
+  set('m-replans', run.replans);
+
+  var st=document.getElementById('state'), parts=[];
+  parts.push('<span class="pill '+((run.mode==='stop'||run.mode==='blind'||run.mode==='nopath')?'stop':'on')+'">'+
+    (MODE[run.mode]||run.mode)+'</span>');
+  parts.push('<span class="pill">'+(ego.v/10*3.6).toFixed(1)+' km/h</span>');
+  parts.push('<span class="pill">'+tracks.length+' tracks</span>');
+  parts.push('<span class="pill">t = '+run.t.toFixed(1)+' s</span>');
+  st.innerHTML=parts.join('');
+}
+function renderLog(){
+  var ul=document.getElementById('log'), html='';
+  for(var i=0;i<Math.min(run.log.length,14);i++){
+    var e=run.log[i];
+    html+='<li><span>'+e.t.toFixed(1)+'s</span> &nbsp;<b>'+e.k+'</b> — '+e.m+'</li>';
+  }
+  ul.innerHTML=html;
+}
+
+// ---------- loop ----------
+var hudAcc=0;
+function frame(ts){
+  if(!lastT) lastT=ts;
+  var dt=Math.min(0.05,(ts-lastT)/1000)*tScale;
+  lastT=ts;
+  if(running){ step(dt); }
+  drawFrame();
+  hudAcc+=dt; if(hudAcc>0.15){ hudAcc=0; updateHUD(); }
+  requestAnimationFrame(frame);
+}
+
+// ---------- controls ----------
+sensors={cam:true,lidar:true,radar:true};
+opts={rain:false,cost:false,pred:true};
+
+var sel=document.getElementById('scn');
+SCEN.forEach(function(s,i){ var o=document.createElement('option'); o.value=i; o.textContent=s.name; sel.appendChild(o); });
+sel.addEventListener('change',function(){ loadScenario(+sel.value); });
+
+document.getElementById('play').addEventListener('click',function(){
+  running=!running; this.textContent=running?'Pause':'Play';
+});
+document.getElementById('reset').addEventListener('click',function(){ loadScenario(+sel.value); });
+document.getElementById('spd').addEventListener('change',function(){ tScale=+this.value; });
+
+Array.prototype.forEach.call(document.querySelectorAll('.sensor'),function(b){
+  b.addEventListener('click',function(){
+    var k=b.dataset.s, on=b.getAttribute('aria-pressed')==='true';
+    sensors[k]=!on; b.setAttribute('aria-pressed', String(!on));
+    tracks=[];
+    logEvent(sensors[k]?'Sensor on':'Sensor off', b.textContent+(sensors[k]?' enabled':' disabled, refusing stale tracks'));
+  });
+});
+function toggle(id,key,label){
+  var b=document.getElementById(id);
+  b.addEventListener('click',function(){
+    var on=b.getAttribute('aria-pressed')==='true';
+    opts[key]=!on; b.setAttribute('aria-pressed',String(!on));
+    if(key==='rain'){ logEvent('Weather', opts.rain?'Rain on, camera range and detection rate drop':'Clear conditions restored'); }
+  });
+}
+toggle('rain','rain'); toggle('showcost','cost'); toggle('showpred','pred');
+
+loadScenario(0);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
